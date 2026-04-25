@@ -1,0 +1,148 @@
+/* GLOBAL */
+body {
+  margin: 0;
+  font-family: "Inter", Arial, sans-serif;
+  background: #0f172a;
+  color: #fff;
+}
+
+/* LAYOUT */
+.app {
+  max-width: 1100px;
+  margin: auto;
+  padding: 20px;
+}
+
+/* HEADER */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.wallet {
+  background: #1e293b;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #38bdf8;
+}
+
+/* CARD */
+.card {
+  background: #1e293b;
+  padding: 20px;
+  margin-top: 20px;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+/* GRID */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 15px;
+}
+
+/* FILE CARD */
+.file-card {
+  background: #334155;
+  padding: 15px;
+  border-radius: 10px;
+  text-align: center;
+  transition: 0.2s;
+}
+
+.file-card:hover {
+  transform: translateY(-5px);
+  background: #475569;
+}
+
+.file-card h4 {
+  font-size: 14px;
+  margin-bottom: 8px;
+  word-break: break-word;
+}
+
+.file-card p {
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.file-card a {
+  display: inline-block;
+  margin-top: 10px;
+  color: #38bdf8;
+  text-decoration: none;
+}
+
+.file-card a:hover {
+  text-decoration: underline;
+}
+
+/* BUTTON */
+button {
+  padding: 10px 15px;
+  border: none;
+  background: #38bdf8;
+  color: black;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+button:hover {
+  opacity: 0.85;
+}
+
+button:disabled {
+  background: gray;
+  cursor: not-allowed;
+}
+
+button.secondary {
+  background: #334155;
+  color: white;
+}
+
+/* INPUT */
+input {
+  width: 100%;
+  padding: 10px;
+  margin-top: 10px;
+  border-radius: 8px;
+  border: none;
+  background: #334155;
+  color: white;
+}
+
+/* ACTIONS */
+.actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+/* LOGIN */
+.login-container {
+  text-align: center;
+  margin-top: 120px;
+}
+
+.login-container .card {
+  display: inline-block;
+  margin: 10px;
+  min-width: 250px;
+}
+
+/* EMPTY */
+.empty {
+  opacity: 0.5;
+  font-style: italic;
+}

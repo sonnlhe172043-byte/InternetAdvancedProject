@@ -1,0 +1,6 @@
+ipfshttpclient
+web3
+streamlit
+requests
+python-dotenv
+fastapi
