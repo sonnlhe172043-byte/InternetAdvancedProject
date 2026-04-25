@@ -194,40 +194,53 @@ def fetch_all_files():
 @app.post("/upload")
 async def upload(
     file: UploadFile = File(...),
-    permission_id: str = Form(...)
+    permission_id: str = Form(None),
+    user_address: str = Form(None)
 ):
-
     logger.info("===== UPLOAD START =====")
 
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
+    # OWNER → dùng wallet address trực tiếp
+    if user_address:
+        logger.info(f"Owner upload, address: {user_address}")
+        addr = user_address
 
-    c.execute(
-        "SELECT user_address FROM permissions WHERE id=?",
-        (permission_id,)
-    )
+    # USER → tìm address qua permission_id
+    elif permission_id:
+        logger.info(f"User upload, permission_id: {permission_id}")
 
-    row = c.fetchone()
-    conn.close()
+        conn = sqlite3.connect(DB)
+        c = conn.cursor()
 
-    if not row:
-        return JSONResponse(status_code=400, content={"error": "invalid permission"})
+        c.execute(
+            "SELECT user_address FROM permissions WHERE id=?",
+            (permission_id,)
+        )
 
-    user_address = row[0]
+        row = c.fetchone()
+        conn.close()
 
-    if not user_address:
-        return JSONResponse(status_code=400, content={"error": "user_address missing"})
+        if not row:
+            return JSONResponse(status_code=400, content={"error": "invalid permission"})
+
+        addr = row[0]
+
+        if not addr:
+            return JSONResponse(status_code=400, content={"error": "user_address missing"})
+
+    else:
+        logger.error("Missing both permission_id and user_address")
+        return JSONResponse(status_code=400, content={"error": "missing permission_id or user_address"})
 
     content = await file.read()
 
     cid = add_to_ipfs(content, file.filename)
-    tx_hash = store_file(cid, file.filename, user_address)
+    tx_hash = store_file(cid, file.filename, addr)
 
     return {
         "status": "success",
         "cid": cid,
         "tx_hash": tx_hash,
-        "uploader": user_address
+        "uploader": addr
     }
 
 

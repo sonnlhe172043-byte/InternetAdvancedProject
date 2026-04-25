@@ -33,7 +33,7 @@ if not w3.is_connected():
 # ======================
 # LOAD ABI
 # ======================
-ABI_PATH = os.path.join(BASE_DIR, "..", "..", "contracts", "abi", "FileStorage.json")
+ABI_PATH = os.path.join(BASE_DIR, "contracts", "abi", "FileStorage.json")
 
 with open(ABI_PATH, "r") as f:
     abi = json.load(f)

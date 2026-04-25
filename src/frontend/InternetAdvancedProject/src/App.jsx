@@ -3,7 +3,7 @@ import axios from "axios";
 import { ethers } from "ethers";
 import "./App.css";
 
-const BACKEND_URL = "http://127.0.0.1:8000";
+const BACKEND_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 function App() {
   const [role, setRole] = useState(null);
@@ -47,7 +47,7 @@ function App() {
     await loadFiles(addr);
   }
 
-  // USER LOGIN (FIXED)
+  // USER LOGIN
   async function loginUser() {
     const formData = new FormData();
     formData.append("permission_id", permissionId);
@@ -67,7 +67,7 @@ function App() {
     await loadFiles(addr);
   }
 
-  // CREATE PERMISSION (UNCHANGED UI)
+  // CREATE PERMISSION
   async function createPermission() {
     const formData = new FormData();
     formData.append("email", email);
@@ -92,14 +92,22 @@ function App() {
 
   // UPLOAD
   async function uploadFile() {
+    if (!file) {
+      alert("Please select a file");
+      return;
+    }
+
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("permission_id", permissionId);
+
+    if (role === "owner") {
+      formData.append("user_address", account);
+    } else {
+      formData.append("permission_id", permissionId);
+    }
 
     setUploading(true);
-
     await axios.post(`${BACKEND_URL}/upload`, formData);
-
     setUploading(false);
 
     await loadFiles(role === "owner" ? account : userAddress);
