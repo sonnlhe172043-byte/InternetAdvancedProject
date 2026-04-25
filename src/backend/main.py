@@ -2,7 +2,7 @@ import smtplib
 import sqlite3
 from email.mime.text import MIMEText
 
-from src.backend.db import DB
+from db import DB
 
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,8 +17,8 @@ import random
 from dotenv import load_dotenv
 import os
 
-from src.backend.ipfs import add_to_ipfs
-from src.backend.blockchain import store_file, contract
+from ipfs import add_to_ipfs
+from blockchain import store_file, contract
 
 app = FastAPI()
 
