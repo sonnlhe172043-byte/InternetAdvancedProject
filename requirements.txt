@@ -1,6 +1,6 @@
-ipfshttpclient
+fastapi
+uvicorn
+python-multipart
 web3
-streamlit
 requests
 python-dotenv
-fastapi
