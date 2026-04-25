@@ -25,9 +25,7 @@ if not private_key:
 # ======================
 # CONNECT WEB3
 # ======================
-w3 = Web3(Web3.HTTPProvider(
-    "https://sepolia.infura.io/v3/10ac15fdd4404b37aeeaf407841b3982"
-))
+w3 = Web3(Web3.HTTPProvider(os.getenv("INFURA_URL")))
 
 if not w3.is_connected():
     raise Exception("Failed to connect to blockchain")
