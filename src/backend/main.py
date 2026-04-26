@@ -1,8 +1,7 @@
 import smtplib
-import sqlite3
 from email.mime.text import MIMEText
 
-from db import DB
+from db import get_conn, init_db
 
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,7 +9,6 @@ from fastapi.responses import JSONResponse
 
 from web3 import Web3
 import logging
-import traceback
 import uuid
 import random
 
@@ -46,12 +44,15 @@ EMAIL_SENDER = os.getenv("EMAIL_SENDER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 
 # =========================
-# GENERATE ADDRESS
+# STARTUP
 # =========================
-def generate_user_address():
-    return "0x" + "".join(random.choices("0123456789abcdef", k=40))
+@app.on_event("startup")
+def startup():
+    init_db()
 
-
+# =========================
+# SEND EMAIL
+# =========================
 def send_email(to_email: str, permission_id: str):
     msg = MIMEText(f"Your Permission ID is: {permission_id}")
     msg["Subject"] = "Web3 Permission ID"
@@ -65,76 +66,52 @@ def send_email(to_email: str, permission_id: str):
     server.quit()
 
     print(f"[EMAIL SENT] {to_email} -> {permission_id}")
+
 # =========================
-# CREATE PERMISSION (NO DUP EMAIL)
+# CREATE PERMISSION
 # =========================
 @app.post("/create-permission")
 def create_permission(email: str = Form(...)):
-
-    conn = sqlite3.connect(DB)
+    conn = get_conn()
     c = conn.cursor()
 
-    # 1. CHECK EMAIL EXISTS
     c.execute(
-        "SELECT id, user_address FROM permissions WHERE email=?",
+        "SELECT id, user_address FROM permissions WHERE email=%s",
         (email,)
     )
-
     existing = c.fetchone()
 
-    # =========================
-    # IF EXISTS → RETURN OLD + SEND EMAIL
-    # =========================
     if existing:
         permission_id, user_address = existing
-
         conn.close()
+        send_email(email, permission_id)
+        return {"status": "exists", "permission_id": permission_id, "user_address": user_address}
 
-        send_email(email, permission_id)  # 🔥 gửi đúng permission_id cũ
-
-        return {
-            "status": "exists",
-            "permission_id": permission_id,
-            "user_address": user_address
-        }
-
-    # =========================
-    # IF NOT EXISTS → CREATE NEW
-    # =========================
     permission_id = str(uuid.uuid4())[:12]
     user_address = "0x" + "".join(random.choices("0123456789abcdef", k=40))
 
     c.execute(
-        "INSERT INTO permissions (id, email, user_address) VALUES (?, ?, ?)",
+        "INSERT INTO permissions (id, email, user_address) VALUES (%s, %s, %s)",
         (permission_id, email, user_address)
     )
-
     conn.commit()
     conn.close()
 
-    # 🔥 gửi permission_id vừa tạo
     send_email(email, permission_id)
-
-    return {
-        "status": "success",
-        "permission_id": permission_id,
-        "user_address": user_address
-    }
+    return {"status": "success", "permission_id": permission_id, "user_address": user_address}
 
 # =========================
 # LOGIN
 # =========================
 @app.post("/login")
 def login(permission_id: str = Form(...)):
-
-    conn = sqlite3.connect(DB)
+    conn = get_conn()
     c = conn.cursor()
 
     c.execute(
-        "SELECT email, user_address FROM permissions WHERE id=?",
+        "SELECT email, user_address FROM permissions WHERE id=%s",
         (permission_id.strip(),)
     )
-
     row = c.fetchone()
     conn.close()
 
@@ -142,14 +119,7 @@ def login(permission_id: str = Form(...)):
         return {"error": "invalid permission"}
 
     email, user_address = row
-
-    return {
-        "status": "success",
-        "email": email,
-        "user_address": user_address,
-        "permission_id": permission_id
-    }
-
+    return {"status": "success", "email": email, "user_address": user_address, "permission_id": permission_id}
 
 # =========================
 # HELPERS
@@ -160,13 +130,11 @@ def to_checksum(addr):
     except:
         return addr
 
-
 def build_ipfs_url(cid):
     return f"https://gateway.pinata.cloud/ipfs/{cid}"
 
-
 # =========================
-# FETCH FILES (NO CACHE - FIXED)
+# FETCH FILES
 # =========================
 def fetch_all_files():
     count = contract.functions.getTotalFiles().call()
@@ -174,7 +142,6 @@ def fetch_all_files():
 
     for i in range(1, count + 1):
         cid, owner, uploader, filename, timestamp, is_public = contract.functions.getFile(i).call()
-
         files.append({
             "id": i,
             "cid": cid,
@@ -188,7 +155,6 @@ def fetch_all_files():
 
     return files
 
-
 # =========================
 # UPLOAD
 # =========================
@@ -200,23 +166,16 @@ async def upload(
 ):
     logger.info("===== UPLOAD START =====")
 
-    # OWNER → dùng wallet address trực tiếp
     if user_address:
-        logger.info(f"Owner upload, address: {user_address}")
         addr = user_address
 
-    # USER → tìm address qua permission_id
     elif permission_id:
-        logger.info(f"User upload, permission_id: {permission_id}")
-
-        conn = sqlite3.connect(DB)
+        conn = get_conn()
         c = conn.cursor()
-
         c.execute(
-            "SELECT user_address FROM permissions WHERE id=?",
+            "SELECT user_address FROM permissions WHERE id=%s",
             (permission_id,)
         )
-
         row = c.fetchone()
         conn.close()
 
@@ -224,57 +183,42 @@ async def upload(
             return JSONResponse(status_code=400, content={"error": "invalid permission"})
 
         addr = row[0]
-
         if not addr:
             return JSONResponse(status_code=400, content={"error": "user_address missing"})
 
     else:
-        logger.error("Missing both permission_id and user_address")
         return JSONResponse(status_code=400, content={"error": "missing permission_id or user_address"})
 
     content = await file.read()
-
     cid = add_to_ipfs(content, file.filename)
     tx_hash = store_file(cid, file.filename, addr)
 
-    return {
-        "status": "success",
-        "cid": cid,
-        "tx_hash": tx_hash,
-        "uploader": addr
-    }
-
+    return {"status": "success", "cid": cid, "tx_hash": tx_hash, "uploader": addr}
 
 # =========================
 # MY FILES
 # =========================
 @app.get("/my-files/{user_address}")
 def get_my_files(user_address: str):
-
     user_address = to_checksum(user_address)
     files = fetch_all_files()
-
     return [
         f for f in files
         if f["owner"].lower() == user_address.lower()
         or f["uploader"].lower() == user_address.lower()
     ]
 
-
 # =========================
 # SHARED FILES
 # =========================
 @app.get("/shared-files/{user_address}")
 def get_shared_files(user_address: str):
-
     user_address = to_checksum(user_address)
     files = fetch_all_files()
-
     return [
         f for f in files
         if f["uploader"].lower() != user_address.lower()
     ]
-
 
 # =========================
 # REFRESH
@@ -283,7 +227,6 @@ def get_shared_files(user_address: str):
 def refresh():
     files = fetch_all_files()
     return {"total": len(files)}
-
 
 # =========================
 # RUN

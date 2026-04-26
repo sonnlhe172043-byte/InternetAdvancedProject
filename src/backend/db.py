@@ -1,5 +1,18 @@
 import os
-import sqlite3
+import psycopg2
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB = os.path.join(BASE_DIR, "permissions.db")
+def get_conn():
+    return psycopg2.connect(os.getenv("DATABASE_URL"))
+
+def init_db():
+    conn = get_conn()
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS permissions (
+            id TEXT PRIMARY KEY,
+            email TEXT UNIQUE,
+            user_address TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
