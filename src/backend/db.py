@@ -4,7 +4,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 def get_conn():
-    return psycopg2.connect(os.getenv("DATABASE_URL"))
+    return psycopg2.connect(
+        host="aws-1-ap-northeast-1.pooler.supabase.com",
+        port=5432,
+        dbname="postgres",
+        user="postgres.yxmtutzdjqiybetvkguf",
+        password=os.getenv("DB_PASSWORD")
+    )
 
 def init_db():
     conn = get_conn()
