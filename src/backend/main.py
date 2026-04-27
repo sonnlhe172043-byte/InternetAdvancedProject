@@ -6,17 +6,17 @@ import threading
 
 from db import get_conn, init_db
 
-from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, UploadFile, File, Form  # noqa
+from fastapi.middleware.cors import CORSMiddleware # noqa
+from fastapi.responses import JSONResponse, Response # noqa
 
-from web3 import Web3
+from web3 import Web3 # noqa
 import logging
 import uuid
 import random
 import traceback
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv # noqa
 import os
 
 from ipfs import add_to_ipfs
@@ -50,7 +50,7 @@ DEPLOY_BLOCK = 10398596  # block deploy contract FileStorage tren Sepolia
 # LIFESPAN
 # =========================
 @asynccontextmanager
-async def lifespan(app):
+async def lifespan(app): # noqa
     logger.info("Server dang khoi dong...")
     try:
         init_db()
@@ -59,7 +59,6 @@ async def lifespan(app):
         logger.error(f"Loi khoi tao database: {e}")
         logger.error(traceback.format_exc())
 
-    # Fetch truoc khi nhan request — user vao la co data ngay
     threading.Thread(target=fetch_all_files, daemon=True).start()
     logger.info("[LIFESPAN] Dang fetch files ngam...")
 
@@ -200,7 +199,7 @@ def build_ipfs_url(cid):
 # FETCH EVENTS WITH RETRY (xu ly 429 cho get_logs)
 # =========================
 def fetch_events_with_retry(from_block, to_block, retries=3):
-    for attempt in range(retries):
+    for attempt in range(retries): # noqa
         try:
             return contract.events.FileUploaded.get_logs(
                 from_block=from_block,
@@ -208,7 +207,7 @@ def fetch_events_with_retry(from_block, to_block, retries=3):
             )
         except Exception as e:
             if "429" in str(e) and attempt < retries - 1:
-                wait = 2 ** attempt  # 1s -> 2s -> 4s
+                wait = 2 ** attempt
                 logger.warning(f"[FETCH] 429 get_logs | thu lai lan {attempt + 1} sau {wait}s...")
                 time.sleep(wait)
             else:
@@ -218,12 +217,12 @@ def fetch_events_with_retry(from_block, to_block, retries=3):
 # GET FILE WITH RETRY (xu ly 429 cho getFile)
 # =========================
 def get_file_with_retry(file_id, retries=3):
-    for attempt in range(retries):
+    for attempt in range(retries): # noqa
         try:
             return contract.functions.getFile(file_id).call()
         except Exception as e:
             if "429" in str(e) and attempt < retries - 1:
-                wait = 2 ** attempt  # 1s -> 2s -> 4s
+                wait = 2 ** attempt
                 logger.warning(f"[FETCH] 429 getFile #{file_id} | thu lai lan {attempt + 1} sau {wait}s...")
                 time.sleep(wait)
             else:
@@ -239,13 +238,11 @@ def fetch_all_files():
 
     now = int(time.time())
 
-    # Tra ve cache neu con han
     if now - _cache["last_updated"] < CACHE_TTL and _cache["files"]:
         remaining = CACHE_TTL - (now - _cache["last_updated"])
         logger.info(f"[FETCH] Dung cache | tong: {len(_cache['files'])} files | con {remaining}s")
         return _cache["files"]
 
-    # Neu thread khac dang fetch, doi no xong roi dung cache cua no
     if not _fetch_lock.acquire(blocking=False):
         logger.info("[FETCH] Thread khac dang fetch, dang doi...")
         _fetch_lock.acquire()
@@ -253,7 +250,6 @@ def fetch_all_files():
         return _cache["files"]
 
     try:
-        # Kiem tra lai sau khi gianh duoc lock
         now = int(time.time())
         if now - _cache["last_updated"] < CACHE_TTL and _cache["files"]:
             return _cache["files"]
@@ -285,7 +281,7 @@ def fetch_all_files():
                 if file_id in existing_ids:
                     continue
 
-                raw = get_file_with_retry(file_id)  # co retry neu 429
+                raw = get_file_with_retry(file_id)
                 new_files.append({
                     "id":        file_id,
                     "cid":       raw[0],
@@ -297,10 +293,10 @@ def fetch_all_files():
                     "ipfs_url":  build_ipfs_url(raw[0])
                 })
                 existing_ids.add(file_id)
-                time.sleep(0.2)  # sleep sau moi getFile call, tranh 429
+                time.sleep(0.2)
 
             current = to_block + 1
-            time.sleep(0.1)  # sleep giua cac chunk
+            time.sleep(0.1)
 
         if new_files:
             _cache["files"].extend(new_files)
@@ -319,6 +315,29 @@ def fetch_all_files():
 
     finally:
         _fetch_lock.release()
+
+# =========================
+# PING (cho UptimeRobot)
+# =========================
+@app.api_route("/ping", methods=["GET", "HEAD"])
+def ping():
+    return Response(status_code=200)
+
+# =========================
+# USERS (cho sidebar)
+# =========================
+@app.get("/users")
+def get_users():
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute("SELECT id, email, user_address FROM permissions")
+        rows = c.fetchall()
+        conn.close()
+        return [{"id": r[0], "email": r[1], "address": r[2]} for r in rows]
+    except Exception as e:
+        logger.error(f"[USERS] Loi: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 # =========================
 # UPLOAD
@@ -461,5 +480,5 @@ def refresh():
 # RUN
 # =========================
 if __name__ == "__main__":
-    import uvicorn
+    import uvicorn # noqa
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
