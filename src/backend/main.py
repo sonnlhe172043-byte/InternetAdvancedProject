@@ -5,6 +5,8 @@ import time
 
 from db import get_conn, init_db
 
+import threading
+
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -19,7 +21,7 @@ from dotenv import load_dotenv
 import os
 
 from ipfs import add_to_ipfs
-from blockchain import store_file, contract
+from blockchain import store_file, contract, w3
 
 load_dotenv()
 
@@ -38,9 +40,12 @@ logger = logging.getLogger("app")
 # =========================
 _cache = {
     "files": [],
-    "last_updated": 0
+    "last_updated": 0,
+    "last_block": 0
 }
-CACHE_TTL = 60  # cache 60 giay
+CACHE_TTL = 300
+MAX_BLOCK_RANGE = 40000
+DEPLOY_BLOCK = 10398596  # block deploy contract FileStorage tren Sepolia
 
 # =========================
 # LIFESPAN
@@ -54,6 +59,12 @@ async def lifespan(app):
     except Exception as e:
         logger.error(f"Loi khoi tao database: {e}")
         logger.error(traceback.format_exc())
+
+    # Fetch truoc khi nhan request — user vao la co data ngay
+    import threading
+    threading.Thread(target=fetch_all_files, daemon=True).start()
+    logger.info("[LIFESPAN] Dang fetch files ngam...")
+
     yield
     logger.info("Server dang tat...")
 
@@ -188,48 +199,112 @@ def build_ipfs_url(cid):
     return f"https://gateway.pinata.cloud/ipfs/{cid}"
 
 # =========================
-# FETCH FILES (WITH CACHE)
+# FETCH WITH RETRY (xu ly 429 rate limit)
 # =========================
+def fetch_events_with_retry(from_block, to_block, retries=3):
+    for attempt in range(retries):
+        try:
+            return contract.events.FileUploaded.get_logs(
+                from_block=from_block,
+                to_block=to_block
+            )
+        except Exception as e:
+            if "429" in str(e) and attempt < retries - 1:
+                wait = 2 ** attempt  # 1s -> 2s -> 4s (exponential backoff)
+                logger.warning(f"[FETCH] 429 rate limit | thu lai lan {attempt + 1} sau {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
+
+# =========================
+# FETCH FILES (INCREMENTAL - EVENT LOG)
+# =========================
+
+_fetch_lock = threading.Lock()
+
 def fetch_all_files():
     global _cache
 
     now = int(time.time())
 
+    # Tra ve cache neu con han
     if now - _cache["last_updated"] < CACHE_TTL and _cache["files"]:
         remaining = CACHE_TTL - (now - _cache["last_updated"])
         logger.info(f"[FETCH] Dung cache | tong: {len(_cache['files'])} files | con {remaining}s")
         return _cache["files"]
 
-    logger.info("[FETCH] Cache het han, dang lay tu blockchain...")
+    # Neu thread khac dang fetch, doi no xong roi dung cache cua no
+    if not _fetch_lock.acquire(blocking=False):
+        logger.info("[FETCH] Thread khac dang fetch, dang doi...")
+        _fetch_lock.acquire()   # block cho den khi thread kia release
+        _fetch_lock.release()
+        return _cache["files"]  # dung cache vua duoc cap nhat
+
     try:
-        count = contract.functions.getTotalFiles().call()
-        logger.info(f"[FETCH] Tong so files tren blockchain: {count}")
-        files = []
+        # Kiem tra lai sau khi gianh duoc lock (phong truong hop thread kia vua xong)
+        now = int(time.time())
+        if now - _cache["last_updated"] < CACHE_TTL and _cache["files"]:
+            return _cache["files"]
 
-        for i in range(1, count + 1):
-            cid, owner, uploader, filename, timestamp, is_public = contract.functions.getFile(i).call()
-            logger.info(f"[FETCH] File #{i} | name: {filename} | owner: {owner[:10]}... | uploader: {uploader[:10]}...")
-            files.append({
-                "id": i,
-                "cid": cid,
-                "owner": to_checksum(owner),
-                "uploader": to_checksum(uploader),
-                "filename": filename,
-                "timestamp": timestamp,
-                "isPublic": is_public,
-                "ipfs_url": build_ipfs_url(cid)
-            })
+        logger.info("[FETCH] Cache het han, kiem tra block moi tren blockchain...")
 
-        _cache["files"] = files
+        latest_block = w3.eth.block_number
+        from_block = _cache["last_block"] if _cache["last_block"] > 0 else DEPLOY_BLOCK
+
+        if from_block > latest_block:
+            logger.info(f"[FETCH] Khong co block moi (last={from_block}, latest={latest_block}), giu cache")
+            _cache["last_updated"] = now
+            return _cache["files"]
+
+        existing_ids = {f["id"] for f in _cache["files"]}
+        new_files = []
+        total_events = 0
+        current = from_block
+
+        while current <= latest_block:
+            to_block = min(current + MAX_BLOCK_RANGE, latest_block)
+            logger.info(f"[FETCH] Querying events | block {current} -> {to_block}")
+
+            events = fetch_events_with_retry(current, to_block)
+            total_events += len(events)
+
+            for e in events:
+                file_id = e["args"]["id"]
+                if file_id in existing_ids:
+                    continue
+                raw = contract.functions.getFile(file_id).call()
+                new_files.append({
+                    "id":        file_id,
+                    "cid":       raw[0],
+                    "owner":     to_checksum(raw[1]),
+                    "uploader":  to_checksum(raw[2]),
+                    "filename":  raw[3],
+                    "timestamp": raw[4],
+                    "isPublic":  raw[5],
+                    "ipfs_url":  build_ipfs_url(raw[0])
+                })
+                existing_ids.add(file_id)
+
+            current = to_block + 1
+            time.sleep(0.1)
+
+        if new_files:
+            _cache["files"].extend(new_files)
+            logger.info(f"[FETCH] Them {len(new_files)} files moi | tong: {len(_cache['files'])}")
+        else:
+            logger.info(f"[FETCH] Khong co file moi | da quet {total_events} events")
+
+        _cache["last_block"] = latest_block + 1
         _cache["last_updated"] = now
-        logger.info(f"[FETCH] Cap nhat cache thanh cong | tong: {len(files)} files")
-        return files
+        return _cache["files"]
 
     except Exception as e:
         logger.error(f"[FETCH] That bai: {e}")
         logger.error(traceback.format_exc())
         raise
 
+    finally:
+        _fetch_lock.release()  # luon release du thanh cong hay loi
 # =========================
 # UPLOAD
 # =========================
@@ -280,23 +355,20 @@ async def upload(
         tx_hash = store_file(cid, file.filename, addr)
         logger.info(f"[UPLOAD] Blockchain thanh cong | tx_hash: {tx_hash}")
 
-        # Them file moi vao cache luon de hien thi ngay
         new_file = {
-            "id": len(_cache["files"]) + 1,
-            "cid": cid,
-            "owner": to_checksum(addr),
-            "uploader": to_checksum(addr),
-            "filename": file.filename,
+            "id":        len(_cache["files"]) + 1,
+            "cid":       cid,
+            "owner":     to_checksum(addr),
+            "uploader":  to_checksum(addr),
+            "filename":  file.filename,
             "timestamp": int(time.time()),
-            "isPublic": True,
-            "ipfs_url": build_ipfs_url(cid)
+            "isPublic":  False,
+            "ipfs_url":  build_ipfs_url(cid)
         }
         _cache["files"].append(new_file)
         logger.info(f"[UPLOAD] Da them file moi vao cache | filename: {file.filename} | id: {new_file['id']}")
 
         return {"status": "success", "cid": cid, "tx_hash": tx_hash, "uploader": addr}
-
-
 
     except Exception as e:
         logger.error(f"[UPLOAD] Loi: {e}")
@@ -314,7 +386,6 @@ def get_my_files(user_address: str):
         files = fetch_all_files()
 
         one_day_ago = int(time.time()) - (24 * 60 * 60)
-        logger.info(f"[MY-FILES] Chi lay files sau timestamp: {one_day_ago}")
 
         result = [
             f for f in files
@@ -341,7 +412,6 @@ def get_shared_files(user_address: str):
         files = fetch_all_files()
 
         one_day_ago = int(time.time()) - (24 * 60 * 60)
-        logger.info(f"[SHARED-FILES] Chi lay files sau timestamp: {one_day_ago}")
 
         result = [
             f for f in files
@@ -363,7 +433,6 @@ def get_shared_files(user_address: str):
 def refresh():
     logger.info("[REFRESH] Dang refresh...")
     try:
-        # Xoa cache de buoc fetch lai tu blockchain
         _cache["last_updated"] = 0
         files = fetch_all_files()
         logger.info(f"[REFRESH] Tong: {len(files)} files")
