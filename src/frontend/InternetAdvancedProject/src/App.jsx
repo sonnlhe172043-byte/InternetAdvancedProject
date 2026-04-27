@@ -17,6 +17,10 @@ function App() {
   const [sharedFiles, setSharedFiles] = useState([]);
   const [uploading, setUploading] = useState(false);
 
+  // SIDEBAR
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [users, setUsers] = useState([]);
+
   function logout() {
     setRole(null);
     setAccount("");
@@ -27,15 +31,28 @@ function App() {
     setFile(null);
     setMyFiles([]);
     setSharedFiles([]);
+    setUsers([]);
+  }
+
+  async function loadUsers() {
+    try {
+      const res = await axios.get(`${BACKEND_URL}/users`);
+      setUsers(res.data || []);
+    } catch {
+      setUsers([]);
+    }
   }
 
   async function connectWallet() {
     const provider = new ethers.BrowserProvider(window.ethereum);
     const accounts = await provider.send("eth_requestAccounts", []);
     const addr = accounts[0];
+
     setAccount(addr);
     setRole("owner");
+
     await loadFiles(addr);
+    await loadUsers();
   }
 
   async function loginUser() {
@@ -48,6 +65,7 @@ function App() {
     const addr = res.data.user_address;
     setUserAddress(addr);
     setRole("user");
+
     await loadFiles(addr);
   }
 
@@ -62,6 +80,7 @@ function App() {
   async function loadFiles(addr) {
     const my = await axios.get(`${BACKEND_URL}/my-files/${addr}`);
     const shared = await axios.get(`${BACKEND_URL}/shared-files/${addr}`);
+
     setMyFiles(my.data || []);
     setSharedFiles(shared.data || []);
   }
@@ -87,6 +106,7 @@ function App() {
     await loadFiles(addr);
   }
 
+  // LOGIN SCREEN
   if (!role) {
     return (
       <div className="login-container">
@@ -113,99 +133,150 @@ function App() {
   }
 
   return (
-    <div className="app">
-      <div className="header">
-        <h1>{role === "owner" ? "Owner" : "User"} Dashboard</h1>
-
-        <div className="header-right">
-          <button onClick={logout}>Logout</button>
-          <span className="wallet">
-            {(role === "owner" ? account : userAddress)?.slice(0, 6)}...
-          </span>
-        </div>
-      </div>
-
-      {/* MAIN */}
-      <div className="section">
-        <div className="card main">
-          <h2>Upload</h2>
-
-          <input type="file" onChange={(e) => setFile(e.target.files[0])} />
-
-          <div className="actions">
-            <button className="primary" onClick={uploadFile} disabled={uploading}>
-              {uploading ? "Uploading..." : "Upload"}
-            </button>
-
-            <button onClick={refresh}>Refresh</button>
-          </div>
-        </div>
-      </div>
-
-      {/* OWNER */}
+    <>
+      {/* SIDEBAR */}
       {role === "owner" && (
-        <div className="section">
-          <div className="card">
-            <h2>Create Permission</h2>
+        <div className={`sidebar ${sidebarOpen ? "" : "collapsed"}`}>
+          <div className="sidebar-header">
+            {sidebarOpen && <h3>Users</h3>}
 
-            <input
-              placeholder="Email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-
-            <button className="primary" onClick={createPermission}>
-              Generate
+            <button
+              className="toggle-btn"
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+            >
+              {sidebarOpen ? "←" : "→"}
             </button>
-
-            {newPermission && (
-              <p style={{ marginTop: 10 }}>
-                ID: <b>{newPermission}</b>
-              </p>
-            )}
           </div>
+
+          {sidebarOpen && (
+            <div className="user-list">
+              {users.map((u, i) => (
+                <div key={i} className="user-item">
+                  {u.email || u.address?.slice(0, 6)}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
-      {/* FILES */}
-      <div className="section row">
-        <div className="card">
-          <h2>My Files</h2>
+      {/* MAIN APP */}
+      <div
+        className={`app ${
+          role === "owner" ? "with-sidebar" : ""
+        } ${!sidebarOpen ? "collapsed" : ""}`}
+      >
+        <div className="header">
+          <h1>{role === "owner" ? "Owner" : "User"} Dashboard</h1>
 
-          {myFiles.length === 0 ? (
-            <p className="empty">Empty</p>
-          ) : (
-            <div className="grid">
-              {myFiles.map((f) => (
-                <div key={f.id} className="file-card">
-                  <h4>{f.filename}</h4>
-                  <p>{new Date(f.timestamp * 1000).toLocaleString()}</p>
-                  <a href={f.ipfs_url} target="_blank">Open</a>
-                </div>
-              ))}
-            </div>
-          )}
+          <div className="header-right">
+            <button onClick={logout}>Logout</button>
+            <span className="wallet">
+              {(role === "owner" ? account : userAddress)?.slice(0, 6)}...
+            </span>
+          </div>
         </div>
 
-        <div className="card">
-          <h2>Shared</h2>
+        {/* MAIN */}
+        <div className="section">
+          <div className="card main">
+            <h2>Upload</h2>
 
-          {sharedFiles.length === 0 ? (
-            <p className="empty">Empty</p>
-          ) : (
-            <div className="grid">
-              {sharedFiles.map((f) => (
-                <div key={f.id} className="file-card">
-                  <h4>{f.filename}</h4>
-                  <p>{new Date(f.timestamp * 1000).toLocaleString()}</p>
-                  <a href={f.ipfs_url} target="_blank">Open</a>
-                </div>
-              ))}
+            <input type="file" onChange={(e) => setFile(e.target.files[0])} />
+
+            <div className="actions">
+              <button
+                className="primary"
+                onClick={uploadFile}
+                disabled={uploading}
+              >
+                {uploading ? "Uploading..." : "Upload"}
+              </button>
+
+              <button onClick={refresh}>Refresh</button>
             </div>
-          )}
+          </div>
+        </div>
+
+        {/* OWNER */}
+        {role === "owner" && (
+          <div className="section">
+            <div className="card">
+              <h2>Create Permission</h2>
+
+              <input
+                placeholder="Email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+
+              <button className="primary" onClick={createPermission}>
+                Generate
+              </button>
+
+              {newPermission && (
+                <p style={{ marginTop: 10 }}>
+                  ID: <b>{newPermission}</b>
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* FILES */}
+        <div className="section row">
+          <div className="card">
+            <h2>My Files</h2>
+
+            {myFiles.length === 0 ? (
+              <p className="empty">Empty</p>
+            ) : (
+              <div className="grid">
+                {myFiles.map((f) => (
+                  <div key={f.id} className="file-card">
+                    <div>
+                      <h4>{f.filename}</h4>
+                      <p>
+                        {new Date(f.timestamp * 1000).toLocaleString()}
+                      </p>
+                    </div>
+
+                    <a href={f.ipfs_url} target="_blank" rel="noreferrer">
+                      Open
+                    </a>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <h2>Shared</h2>
+
+            {sharedFiles.length === 0 ? (
+              <p className="empty">Empty</p>
+            ) : (
+              <div className="grid">
+                {sharedFiles.map((f) => (
+                  <div key={f.id} className="file-card">
+                    <div>
+                      <h4>{f.filename}</h4>
+                      <p>
+                        {new Date(f.timestamp * 1000).toLocaleString()}
+                      </p>
+                    </div>
+
+                    <a href={f.ipfs_url} target="_blank" rel="noreferrer">
+                      Open
+                    </a>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
 

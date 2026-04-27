@@ -2,10 +2,9 @@ import smtplib
 from email.mime.text import MIMEText
 from contextlib import asynccontextmanager
 import time
+import threading
 
 from db import get_conn, init_db
-
-import threading
 
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -61,7 +60,6 @@ async def lifespan(app):
         logger.error(traceback.format_exc())
 
     # Fetch truoc khi nhan request — user vao la co data ngay
-    import threading
     threading.Thread(target=fetch_all_files, daemon=True).start()
     logger.info("[LIFESPAN] Dang fetch files ngam...")
 
@@ -199,7 +197,7 @@ def build_ipfs_url(cid):
     return f"https://gateway.pinata.cloud/ipfs/{cid}"
 
 # =========================
-# FETCH WITH RETRY (xu ly 429 rate limit)
+# FETCH EVENTS WITH RETRY (xu ly 429 cho get_logs)
 # =========================
 def fetch_events_with_retry(from_block, to_block, retries=3):
     for attempt in range(retries):
@@ -210,8 +208,23 @@ def fetch_events_with_retry(from_block, to_block, retries=3):
             )
         except Exception as e:
             if "429" in str(e) and attempt < retries - 1:
-                wait = 2 ** attempt  # 1s -> 2s -> 4s (exponential backoff)
-                logger.warning(f"[FETCH] 429 rate limit | thu lai lan {attempt + 1} sau {wait}s...")
+                wait = 2 ** attempt  # 1s -> 2s -> 4s
+                logger.warning(f"[FETCH] 429 get_logs | thu lai lan {attempt + 1} sau {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
+
+# =========================
+# GET FILE WITH RETRY (xu ly 429 cho getFile)
+# =========================
+def get_file_with_retry(file_id, retries=3):
+    for attempt in range(retries):
+        try:
+            return contract.functions.getFile(file_id).call()
+        except Exception as e:
+            if "429" in str(e) and attempt < retries - 1:
+                wait = 2 ** attempt  # 1s -> 2s -> 4s
+                logger.warning(f"[FETCH] 429 getFile #{file_id} | thu lai lan {attempt + 1} sau {wait}s...")
                 time.sleep(wait)
             else:
                 raise
@@ -219,7 +232,6 @@ def fetch_events_with_retry(from_block, to_block, retries=3):
 # =========================
 # FETCH FILES (INCREMENTAL - EVENT LOG)
 # =========================
-
 _fetch_lock = threading.Lock()
 
 def fetch_all_files():
@@ -236,12 +248,12 @@ def fetch_all_files():
     # Neu thread khac dang fetch, doi no xong roi dung cache cua no
     if not _fetch_lock.acquire(blocking=False):
         logger.info("[FETCH] Thread khac dang fetch, dang doi...")
-        _fetch_lock.acquire()   # block cho den khi thread kia release
+        _fetch_lock.acquire()
         _fetch_lock.release()
-        return _cache["files"]  # dung cache vua duoc cap nhat
+        return _cache["files"]
 
     try:
-        # Kiem tra lai sau khi gianh duoc lock (phong truong hop thread kia vua xong)
+        # Kiem tra lai sau khi gianh duoc lock
         now = int(time.time())
         if now - _cache["last_updated"] < CACHE_TTL and _cache["files"]:
             return _cache["files"]
@@ -272,7 +284,8 @@ def fetch_all_files():
                 file_id = e["args"]["id"]
                 if file_id in existing_ids:
                     continue
-                raw = contract.functions.getFile(file_id).call()
+
+                raw = get_file_with_retry(file_id)  # co retry neu 429
                 new_files.append({
                     "id":        file_id,
                     "cid":       raw[0],
@@ -284,9 +297,10 @@ def fetch_all_files():
                     "ipfs_url":  build_ipfs_url(raw[0])
                 })
                 existing_ids.add(file_id)
+                time.sleep(0.2)  # sleep sau moi getFile call, tranh 429
 
             current = to_block + 1
-            time.sleep(0.1)
+            time.sleep(0.1)  # sleep giua cac chunk
 
         if new_files:
             _cache["files"].extend(new_files)
@@ -304,7 +318,8 @@ def fetch_all_files():
         raise
 
     finally:
-        _fetch_lock.release()  # luon release du thanh cong hay loi
+        _fetch_lock.release()
+
 # =========================
 # UPLOAD
 # =========================

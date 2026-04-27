@@ -92,11 +92,16 @@ body {
 
 /* FILE CARD */
 .file-card {
-  background: #111;
-  padding: 12px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.06);
+  background: #0f0f0f;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.08);
   transition: 0.2s;
+
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 140px;
 }
 
 .file-card:hover {
@@ -189,4 +194,73 @@ input:focus {
 .empty {
   font-size: 12px;
   color: #666;
+}
+/* SIDEBAR */
+.sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 100vh;
+  width: 240px;
+  background: #070707;
+  border-right: 1px solid rgba(255,255,255,0.08);
+  padding: 16px;
+  transition: 0.25s;
+  z-index: 100;
+}
+
+.sidebar.collapsed {
+  width: 64px;
+}
+
+/* APP SHIFT */
+.app.with-sidebar {
+  margin-left: 240px;
+  transition: 0.25s;
+}
+
+.app.with-sidebar.collapsed {
+  margin-left: 64px;
+}
+
+/* SIDEBAR HEADER */
+.sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.sidebar h3 {
+  font-size: 13px;
+  color: #aaa;
+}
+
+/* USER LIST */
+.user-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.user-item {
+  padding: 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+  color: #ddd;
+  border: 1px solid transparent;
+}
+
+.user-item:hover {
+  background: #111;
+  border-color: rgba(255,255,255,0.1);
+}
+
+/* COLLAPSE BUTTON */
+.toggle-btn {
+  background: transparent;
+  border: none;
+  color: #aaa;
+  cursor: pointer;
 }
