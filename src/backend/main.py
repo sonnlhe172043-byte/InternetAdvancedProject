@@ -313,14 +313,14 @@ def get_my_files(user_address: str):
         user_address = to_checksum(user_address)
         files = fetch_all_files()
 
-        thirty_minutes_ago = int(time.time()) - (30 * 60)
-        logger.info(f"[MY-FILES] Chi lay files sau timestamp: {thirty_minutes_ago}")
+        one_day_ago = int(time.time()) - (24 * 60 * 60)
+        logger.info(f"[MY-FILES] Chi lay files sau timestamp: {one_day_ago}")
 
         result = [
             f for f in files
             if (f["owner"].lower() == user_address.lower()
             or f["uploader"].lower() == user_address.lower())
-            and f["timestamp"] >= thirty_minutes_ago
+            and f["timestamp"] >= one_day_ago
         ]
         logger.info(f"[MY-FILES] Tra ve {len(result)} files cho {user_address[:10]}...")
         return result
@@ -340,13 +340,13 @@ def get_shared_files(user_address: str):
         user_address = to_checksum(user_address)
         files = fetch_all_files()
 
-        thirty_minutes_ago = int(time.time()) - (30 * 60)
-        logger.info(f"[SHARED-FILES] Chi lay files sau timestamp: {thirty_minutes_ago}")
+        one_day_ago = int(time.time()) - (24 * 60 * 60)
+        logger.info(f"[SHARED-FILES] Chi lay files sau timestamp: {one_day_ago}")
 
         result = [
             f for f in files
             if f["uploader"].lower() != user_address.lower()
-            and f["timestamp"] >= thirty_minutes_ago
+            and f["timestamp"] >= one_day_ago
         ]
         logger.info(f"[SHARED-FILES] Tra ve {len(result)} files cho {user_address[:10]}...")
         return result
