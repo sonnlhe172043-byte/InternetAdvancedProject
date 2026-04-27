@@ -113,6 +113,10 @@ body {
   font-size: 12px;
   margin-bottom: 6px;
   color: #fff;
+
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .file-card p {
@@ -263,4 +267,10 @@ input:focus {
   border: none;
   color: #aaa;
   cursor: pointer;
+}
+
+.user-item.active {
+  background: #111;
+  border-color: #22c55e;
+  color: #22c55e;
 }

@@ -17,6 +17,8 @@ function App() {
   const [sharedFiles, setSharedFiles] = useState([]);
   const [uploading, setUploading] = useState(false);
 
+  const [selectedUser, setSelectedUser] = useState(null);
+
   // SIDEBAR
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [users, setUsers] = useState([]);
@@ -32,6 +34,7 @@ function App() {
     setMyFiles([]);
     setSharedFiles([]);
     setUsers([]);
+    setSelectedUser(null);
   }
 
   async function loadUsers() {
@@ -106,7 +109,7 @@ function App() {
     await loadFiles(addr);
   }
 
-  // LOGIN SCREEN
+  // LOGIN
   if (!role) {
     return (
       <div className="login-container">
@@ -150,17 +153,31 @@ function App() {
 
           {sidebarOpen && (
             <div className="user-list">
-              {users.map((u, i) => (
-                <div key={i} className="user-item">
-                  {u.email || u.address?.slice(0, 6)}
-                </div>
-              ))}
+              {users.map((u, i) => {
+                const addr = u.user_address || u.address;
+
+                return (
+                  <div
+                    key={i}
+                    className={`user-item ${
+                      selectedUser === addr ? "active" : ""
+                    }`}
+                    onClick={() =>
+                      setSelectedUser(
+                        selectedUser === addr ? null : addr
+                      )
+                    }
+                  >
+                    {u.email || addr?.slice(0, 6)}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
       )}
 
-      {/* MAIN APP */}
+      {/* MAIN */}
       <div
         className={`app ${
           role === "owner" ? "with-sidebar" : ""
@@ -177,7 +194,7 @@ function App() {
           </div>
         </div>
 
-        {/* MAIN */}
+        {/* Upload */}
         <div className="section">
           <div className="card main">
             <h2>Upload</h2>
@@ -225,6 +242,7 @@ function App() {
 
         {/* FILES */}
         <div className="section row">
+          {/* MY FILES */}
           <div className="card">
             <h2>My Files</h2>
 
@@ -250,14 +268,29 @@ function App() {
             )}
           </div>
 
+          {/* SHARED FILES */}
           <div className="card">
             <h2>Shared</h2>
 
-            {sharedFiles.length === 0 ? (
+            {(selectedUser
+              ? sharedFiles.filter(
+                  (f) =>
+                    f.uploader?.toLowerCase() ===
+                    selectedUser.toLowerCase()
+                )
+              : sharedFiles
+            ).length === 0 ? (
               <p className="empty">Empty</p>
             ) : (
               <div className="grid">
-                {sharedFiles.map((f) => (
+                {(selectedUser
+                  ? sharedFiles.filter(
+                      (f) =>
+                        f.uploader?.toLowerCase() ===
+                        selectedUser.toLowerCase()
+                    )
+                  : sharedFiles
+                ).map((f) => (
                   <div key={f.id} className="file-card">
                     <div>
                       <h4>{f.filename}</h4>

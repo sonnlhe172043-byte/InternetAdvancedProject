@@ -460,6 +460,32 @@ def get_shared_files(user_address: str):
         logger.error(traceback.format_exc())
         return JSONResponse(status_code=500, content={"error": str(e)})
 
+@app.get("/shared-files/{user_address}/{filter_address}")
+def get_shared_files_filtered(user_address: str, filter_address: str):
+    logger.info(f"[SHARED-FILES-FILTER] user: {user_address} | filter: {filter_address}")
+    try:
+        user_address = to_checksum(user_address)
+        filter_address = to_checksum(filter_address)
+
+        files = fetch_all_files()
+
+        one_day_ago = int(time.time()) - (24 * 60 * 60)
+
+        result = [
+            f for f in files
+            if f["uploader"].lower() != user_address.lower()  # vẫn là shared
+            and f["uploader"].lower() == filter_address.lower()  # filter theo user click
+            and f["timestamp"] >= one_day_ago
+        ]
+
+        logger.info(f"[SHARED-FILES-FILTER] Tra ve {len(result)} files")
+        return result
+
+    except Exception as e:
+        logger.error(f"[SHARED-FILES-FILTER] Loi: {e}")
+        logger.error(traceback.format_exc())
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
 # =========================
 # REFRESH
 # =========================
