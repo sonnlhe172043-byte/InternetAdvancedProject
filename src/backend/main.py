@@ -1,73 +1,242 @@
-import smtplib
-from email.mime.text import MIMEText
-from contextlib import asynccontextmanager
-import time
-import threading
 
-from db import get_conn, init_db
 
-from fastapi import FastAPI, UploadFile, File, Form  # noqa
+from fastapi import FastAPI # noqa
+from fastapi import UploadFile # noqa
+from fastapi import File # noqa
+from fastapi import Form # noqa
+
+from fastapi.responses import JSONResponse # noqa
 from fastapi.middleware.cors import CORSMiddleware # noqa
-from fastapi.responses import JSONResponse, Response # noqa
 
-from web3 import Web3 # noqa
-import logging
-import uuid
-import random
-import traceback
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv # noqa
-import os
+
+from db import get_conn
+from db import init_db
+
+from blockchain import store_file
 
 from ipfs import add_to_ipfs
-from blockchain import store_file, contract, w3
 
+from queue import Queue
+
+from pathlib import Path # noqa
+
+import traceback
+import threading
+import smtplib
+import uuid
+import random
+import time
+import os
+
+from email.mime.text import MIMEText
+
+# =========================
+# LOAD ENV
+# =========================
 load_dotenv()
 
 # =========================
-# LOGGING
+# FILE VALIDATION
 # =========================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
-logger = logging.getLogger("app")
 
-# =========================
-# CACHE
-# =========================
-_cache = {
-    "files": [],
-    "last_updated": 0,
-    "last_block": 0
+
+
+# 25 MB
+MAX_FILE_SIZE = 25 * 1024 * 1024
+
+# Allowed extensions
+ALLOWED_EXTENSIONS = {
+    ".pdf",
+    ".doc",
+    ".docx",
+
+    ".txt",
+    ".csv",
+
+    ".ppt",
+    ".pptx",
+
+    ".xls",
+    ".xlsx",
+
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+
+    ".mp3",
+    ".wav",
+
+    ".mp4",
+    ".mov",
+
+    ".zip"
 }
-CACHE_TTL = 300
-MAX_BLOCK_RANGE = 40000
-DEPLOY_BLOCK = 10398596  # block deploy contract FileStorage tren Sepolia
+
+# Optional dangerous extensions blacklist
+BLOCKED_EXTENSIONS = {
+    ".exe",
+    ".msi",
+    ".bat",
+    ".cmd",
+    ".sh",
+    ".ps1",
+    ".scr",
+    ".dll",
+    ".jar",
+    ".apk",
+    ".com"
+}
+
+
+EMAIL_SENDER = os.getenv("EMAIL_SENDER")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+
+
 
 # =========================
-# LIFESPAN
+# BLOCKCHAIN QUEUE
 # =========================
-@asynccontextmanager
-async def lifespan(app): # noqa
-    logger.info("Server dang khoi dong...")
+blockchain_queue = Queue()
+
+# =========================
+# HELPERS
+# =========================
+def build_ipfs_url(cid):
+
+    return f"https://gateway.pinata.cloud/ipfs/{cid}"
+
+# =========================
+# EMAIL
+# =========================
+def send_email(to_email, permission_id):
+
     try:
-        init_db()
-        logger.info("Ket noi database thanh cong")
+
+        msg = MIMEText(
+            f"Your Permission ID is:\n\n{permission_id}"
+        )
+
+        msg["Subject"] = "Permission ID"
+        msg["From"] = EMAIL_SENDER
+        msg["To"] = to_email
+
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+
+        server.starttls()
+
+        server.login(
+            EMAIL_SENDER,
+            EMAIL_PASSWORD
+        )
+
+        server.sendmail(
+            EMAIL_SENDER,
+            to_email,
+            msg.as_string()
+        )
+
+        server.quit()
+
     except Exception as e:
-        logger.error(f"Loi khoi tao database: {e}")
-        logger.error(traceback.format_exc())
 
-    threading.Thread(target=fetch_all_files, daemon=True).start()
-    logger.info("[LIFESPAN] Dang fetch files ngam...")
+        print(f"[EMAIL] ERROR: {e}")
 
-    yield
-    logger.info("Server dang tat...")
+
+# =========================
+# BLOCKCHAIN WORKER
+# =========================
+def blockchain_worker():
+
+    print("[BLOCKCHAIN] Worker started")
+
+    while True:
+
+        task = blockchain_queue.get()
+
+        conn = None
+
+        try:
+
+            file_id = task["file_id"]
+            cid = task["cid"]
+            filename = task["filename"]
+            uploader = task["uploader"]
+
+            print(f"[BLOCKCHAIN] Processing file #{file_id}")
+
+            tx_hash = store_file(
+                cid,
+                filename,
+                uploader
+            )
+
+            conn = get_conn()
+            c = conn.cursor()
+
+            c.execute("""
+                UPDATE files
+                SET
+                    tx_hash = %s,
+                    blockchain_status = 'success'
+                WHERE id = %s
+            """, (
+                tx_hash,
+                file_id
+            ))
+
+            conn.commit()
+
+            print(f"[BLOCKCHAIN] SUCCESS FILE #{file_id}")
+
+        except Exception as e:
+
+            print(f"[BLOCKCHAIN] FAILED: {e}")
+
+            print(traceback.format_exc())
+
+            if conn:
+
+                c = conn.cursor()
+
+                c.execute("""
+                    UPDATE files
+                    SET blockchain_status = 'failed'
+                    WHERE id = %s
+                """, (file_id,)) # noqa
+
+                conn.commit()
+
+        finally:
+
+            if conn:
+                conn.close()
+
+            blockchain_queue.task_done()
 
 # =========================
 # APP
 # =========================
+@asynccontextmanager
+async def lifespan(app):
+
+    print("[APP] Starting...")
+
+    init_db()
+
+    threading.Thread(
+        target=blockchain_worker,
+        daemon=True
+    ).start()
+
+    yield
+
+    print("[APP] Shutdown")
+
 app = FastAPI(lifespan=lifespan)
 
 # =========================
@@ -77,267 +246,179 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "https://internet-advanced-project.vercel.app",
+        "https://internet-advanced-project.vercel.app"
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-EMAIL_SENDER = os.getenv("EMAIL_SENDER")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
-
-# =========================
-# SEND EMAIL
-# =========================
-def send_email(to_email: str, permission_id: str):
-    logger.info(f"[EMAIL] Dang gui toi {to_email}...")
-    try:
-        msg = MIMEText(f"Your Permission ID is: {permission_id}")
-        msg["Subject"] = "Web3 Permission ID"
-        msg["From"] = EMAIL_SENDER
-        msg["To"] = to_email
-
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.starttls()
-        server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-        server.sendmail(EMAIL_SENDER, to_email, msg.as_string())
-        server.quit()
-        logger.info(f"[EMAIL] Gui thanh cong toi {to_email} | permission_id: {permission_id}")
-    except Exception as e:
-        logger.error(f"[EMAIL] Gui that bai toi {to_email}: {e}")
-        logger.error(traceback.format_exc())
-
 # =========================
 # CREATE PERMISSION
 # =========================
 @app.post("/create-permission")
-def create_permission(email: str = Form(...)):
-    logger.info(f"[CREATE-PERMISSION] email: {email}")
+def create_permission(
+    email: str = Form(...)
+):
+
     try:
+
         conn = get_conn()
         c = conn.cursor()
 
-        c.execute(
-            "SELECT id, user_address FROM permissions WHERE email=%s",
-            (email,)
-        )
+        c.execute("""
+            SELECT id, user_address
+            FROM permissions
+            WHERE email=%s
+        """, (email,))
+
         existing = c.fetchone()
 
         if existing:
-            permission_id, user_address = existing
+
+            permission_id, address = existing
+
             conn.close()
-            logger.info(f"[CREATE-PERMISSION] Email da ton tai: {email} | permission_id: {permission_id} | address: {user_address}")
+
             send_email(email, permission_id)
-            return {"status": "exists", "permission_id": permission_id, "user_address": user_address}
+
+            return {
+                "status": "exists",
+                "permission_id": permission_id,
+                "user_address": address
+            }
 
         permission_id = str(uuid.uuid4())[:12]
-        user_address = "0x" + "".join(random.choices("0123456789abcdef", k=40))
-        logger.info(f"[CREATE-PERMISSION] Tao moi | permission_id: {permission_id} | address: {user_address}")
 
-        c.execute(
-            "INSERT INTO permissions (id, email, user_address) VALUES (%s, %s, %s)",
-            (permission_id, email, user_address)
+        user_address = "0x" + "".join(
+            random.choices(
+                "0123456789abcdef",
+                k=40
+            )
         )
+
+        c.execute("""
+            INSERT INTO permissions
+            (
+                id,
+                email,
+                user_address
+            )
+            VALUES (%s, %s, %s)
+        """, (
+            permission_id,
+            email,
+            user_address
+        ))
+
         conn.commit()
         conn.close()
-        logger.info(f"[CREATE-PERMISSION] Luu DB thanh cong | email: {email}")
 
         send_email(email, permission_id)
-        return {"status": "success", "permission_id": permission_id, "user_address": user_address}
+
+        return {
+            "status": "success",
+            "permission_id": permission_id,
+            "user_address": user_address
+        }
 
     except Exception as e:
-        logger.error(f"[CREATE-PERMISSION] Loi: {e}")
-        logger.error(traceback.format_exc())
-        return JSONResponse(status_code=500, content={"error": str(e)})
+
+        print(traceback.format_exc())
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e)
+            }
+        )
 
 # =========================
 # LOGIN
 # =========================
 @app.post("/login")
-def login(permission_id: str = Form(...)):
-    logger.info(f"[LOGIN] permission_id: {permission_id.strip()}")
+def login(
+    permission_id: str = Form(...)
+):
+
     try:
+
         conn = get_conn()
         c = conn.cursor()
 
-        c.execute(
-            "SELECT email, user_address FROM permissions WHERE id=%s",
-            (permission_id.strip(),)
-        )
+        c.execute("""
+            SELECT email, user_address
+            FROM permissions
+            WHERE id=%s
+        """, (permission_id.strip(),))
+
         row = c.fetchone()
+
         conn.close()
 
         if not row:
-            logger.warning(f"[LOGIN] Khong tim thay permission_id: {permission_id}")
-            return {"error": "invalid permission"}
 
-        email, user_address = row
-        logger.info(f"[LOGIN] Thanh cong | email: {email} | address: {user_address}")
-        return {"status": "success", "email": email, "user_address": user_address, "permission_id": permission_id}
+            return {
+                "error": "invalid permission"
+            }
 
-    except Exception as e:
-        logger.error(f"[LOGIN] Loi: {e}")
-        logger.error(traceback.format_exc())
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        email, address = row
 
-# =========================
-# HELPERS
-# =========================
-def to_checksum(addr):
-    try:
-        return Web3.to_checksum_address(addr)
-    except Exception as e:
-        logger.warning(f"[CHECKSUM] That bai voi addr={addr}: {e}")
-        return addr
-
-def build_ipfs_url(cid):
-    return f"https://gateway.pinata.cloud/ipfs/{cid}"
-
-# =========================
-# FETCH EVENTS WITH RETRY (xu ly 429 cho get_logs)
-# =========================
-def fetch_events_with_retry(from_block, to_block, retries=3):
-    for attempt in range(retries): # noqa
-        try:
-            return contract.events.FileUploaded.get_logs(
-                from_block=from_block,
-                to_block=to_block
-            )
-        except Exception as e:
-            if "429" in str(e) and attempt < retries - 1:
-                wait = 2 ** attempt
-                logger.warning(f"[FETCH] 429 get_logs | thu lai lan {attempt + 1} sau {wait}s...")
-                time.sleep(wait)
-            else:
-                raise
-
-# =========================
-# GET FILE WITH RETRY (xu ly 429 cho getFile)
-# =========================
-def get_file_with_retry(file_id, retries=3):
-    for attempt in range(retries): # noqa
-        try:
-            return contract.functions.getFile(file_id).call()
-        except Exception as e:
-            if "429" in str(e) and attempt < retries - 1:
-                wait = 2 ** attempt
-                logger.warning(f"[FETCH] 429 getFile #{file_id} | thu lai lan {attempt + 1} sau {wait}s...")
-                time.sleep(wait)
-            else:
-                raise
-
-# =========================
-# FETCH FILES (INCREMENTAL - EVENT LOG)
-# =========================
-_fetch_lock = threading.Lock()
-
-def fetch_all_files():
-    global _cache
-
-    now = int(time.time())
-
-    if now - _cache["last_updated"] < CACHE_TTL and _cache["files"]:
-        remaining = CACHE_TTL - (now - _cache["last_updated"])
-        logger.info(f"[FETCH] Dung cache | tong: {len(_cache['files'])} files | con {remaining}s")
-        return _cache["files"]
-
-    if not _fetch_lock.acquire(blocking=False):
-        logger.info("[FETCH] Thread khac dang fetch, dang doi...")
-        _fetch_lock.acquire()
-        _fetch_lock.release()
-        return _cache["files"]
-
-    try:
-        now = int(time.time())
-        if now - _cache["last_updated"] < CACHE_TTL and _cache["files"]:
-            return _cache["files"]
-
-        logger.info("[FETCH] Cache het han, kiem tra block moi tren blockchain...")
-
-        latest_block = w3.eth.block_number
-        from_block = _cache["last_block"] if _cache["last_block"] > 0 else DEPLOY_BLOCK
-
-        if from_block > latest_block:
-            logger.info(f"[FETCH] Khong co block moi (last={from_block}, latest={latest_block}), giu cache")
-            _cache["last_updated"] = now
-            return _cache["files"]
-
-        existing_ids = {f["id"] for f in _cache["files"]}
-        new_files = []
-        total_events = 0
-        current = from_block
-
-        while current <= latest_block:
-            to_block = min(current + MAX_BLOCK_RANGE, latest_block)
-            logger.info(f"[FETCH] Querying events | block {current} -> {to_block}")
-
-            events = fetch_events_with_retry(current, to_block)
-            total_events += len(events)
-
-            for e in events:
-                file_id = e["args"]["id"]
-                if file_id in existing_ids:
-                    continue
-
-                raw = get_file_with_retry(file_id)
-                new_files.append({
-                    "id":        file_id,
-                    "cid":       raw[0],
-                    "owner":     to_checksum(raw[1]),
-                    "uploader":  to_checksum(raw[2]),
-                    "filename":  raw[3],
-                    "timestamp": raw[4],
-                    "isPublic":  raw[5],
-                    "ipfs_url":  build_ipfs_url(raw[0])
-                })
-                existing_ids.add(file_id)
-                time.sleep(0.2)
-
-            current = to_block + 1
-            time.sleep(0.1)
-
-        if new_files:
-            _cache["files"].extend(new_files)
-            logger.info(f"[FETCH] Them {len(new_files)} files moi | tong: {len(_cache['files'])}")
-        else:
-            logger.info(f"[FETCH] Khong co file moi | da quet {total_events} events")
-
-        _cache["last_block"] = latest_block + 1
-        _cache["last_updated"] = now
-        return _cache["files"]
+        return {
+            "status": "success",
+            "email": email,
+            "user_address": address
+        }
 
     except Exception as e:
-        logger.error(f"[FETCH] That bai: {e}")
-        logger.error(traceback.format_exc())
-        raise
 
-    finally:
-        _fetch_lock.release()
-
-# =========================
-# PING (cho UptimeRobot)
-# =========================
-@app.api_route("/ping", methods=["GET", "HEAD"])
-def ping():
-    return Response(status_code=200)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e)
+            }
+        )
 
 # =========================
-# USERS (cho sidebar)
+# USERS
 # =========================
 @app.get("/users")
 def get_users():
+
     try:
+
         conn = get_conn()
         c = conn.cursor()
-        c.execute("SELECT id, email, user_address FROM permissions")
+
+        c.execute("""
+            SELECT
+                id,
+                email,
+                user_address
+            FROM permissions
+        """)
+
         rows = c.fetchall()
+
         conn.close()
-        return [{"id": r[0], "email": r[1], "address": r[2]} for r in rows]
+
+        return [
+            {
+                "id": r[0],
+                "email": r[1],
+                "address": r[2]
+            }
+            for r in rows
+        ]
+
     except Exception as e:
-        logger.error(f"[USERS] Loi: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e)
+            }
+        )
 
 # =========================
 # UPLOAD
@@ -348,194 +429,341 @@ async def upload(
     permission_id: str = Form(None),
     user_address: str = Form(None)
 ):
-    logger.info(f"[UPLOAD] filename: {file.filename} | permission_id: {permission_id} | user_address: {user_address}")
+
+    conn = None
+
     try:
+
+        # =========================
+        # ADDRESS
+        # =========================
         if user_address:
-            addr = user_address
-            logger.info(f"[UPLOAD] Owner upload | address: {addr}")
+
+            uploader = user_address
 
         elif permission_id:
-            logger.info(f"[UPLOAD] User upload | permission_id: {permission_id}")
+
             conn = get_conn()
             c = conn.cursor()
-            c.execute(
-                "SELECT user_address FROM permissions WHERE id=%s",
-                (permission_id,)
-            )
+
+            c.execute("""
+                SELECT user_address
+                FROM permissions
+                WHERE id=%s
+            """, (permission_id,))
+
             row = c.fetchone()
+
             conn.close()
 
             if not row:
-                logger.warning(f"[UPLOAD] permission_id khong hop le: {permission_id}")
-                return JSONResponse(status_code=400, content={
-                    "error": "Invalid permission ID. Please check and try again."
-                })
 
-            addr = row[0]
-            if not addr:
-                logger.warning(f"[UPLOAD] user_address trong cho permission_id: {permission_id}")
-                return JSONResponse(status_code=400, content={
-                    "error": "No wallet address linked to this permission."
-                })
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "Invalid permission"
+                    }
+                )
 
-            logger.info(f"[UPLOAD] Tim thay address: {addr}")
+            uploader = row[0]
 
         else:
-            logger.error("[UPLOAD] Thieu ca permission_id va user_address")
-            return JSONResponse(status_code=400, content={
-                "error": "Missing permission ID or wallet address."
-            })
 
-        # ✅ IPFS
-        logger.info(f"[UPLOAD] Dang upload len IPFS | filename: {file.filename}")
-        try:
-            content = await file.read()
-            cid = add_to_ipfs(content, file.filename)
-            logger.info(f"[UPLOAD] IPFS thanh cong | CID: {cid}")
-        except Exception as e:
-            logger.error(f"[UPLOAD] IPFS that bai: {e}")
-            logger.error(traceback.format_exc())
-            return JSONResponse(status_code=500, content={
-                "error": "Failed to upload file to IPFS. Please try again."
-            })
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "Missing credentials"
+                }
+            )
+        # =========================
+        # FILE VALIDATION
+        # =========================
+        from pathlib import Path
 
-        # ✅ Blockchain
-        logger.info(f"[UPLOAD] Dang luu len blockchain | CID: {cid} | addr: {addr}")
-        try:
-            tx_hash = store_file(cid, file.filename, addr)
-            logger.info(f"[UPLOAD] Blockchain thanh cong | tx_hash: {tx_hash}")
-        except Exception as e:
-            logger.error(f"[UPLOAD] Blockchain that bai: {e}")
-            logger.error(traceback.format_exc())
-            return JSONResponse(status_code=500, content={
-                "error": "File was saved to IPFS but could not be recorded on blockchain. Please try again."
-            })
+        filename = file.filename.strip()
 
-        # ✅ Cache
-        new_file = {
-            "id":        len(_cache["files"]) + 1,
-            "cid":       cid,
-            "owner":     to_checksum(addr),
-            "uploader":  to_checksum(addr),
-            "filename":  file.filename,
-            "timestamp": int(time.time()),
-            "isPublic":  False,
-            "ipfs_url":  build_ipfs_url(cid)
-        }
-        _cache["files"].append(new_file)
-        logger.info(f"[UPLOAD] Da them file moi vao cache | filename: {file.filename} | id: {new_file['id']}")
+        if not filename:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "Invalid filename"
+                }
+            )
 
-        return JSONResponse(status_code=200, content={
-            "status":   "success",
-            "message":  f"'{file.filename}' uploaded successfully!",
-            "cid":      cid,
-            "tx_hash":  tx_hash,
-            "uploader": addr
+        extension = Path(filename).suffix.lower()
+
+        # Dangerous files
+        if extension in BLOCKED_EXTENSIONS:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": f"{extension} files are not allowed"
+                }
+            )
+
+        # Unsupported files
+        if extension not in ALLOWED_EXTENSIONS:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": f"Unsupported file type: {extension}"
+                }
+            )
+        # =========================
+        # READ FILE
+        # =========================
+        content = await file.read()
+
+        # =========================
+        # FILE LIMIT
+        # =========================
+        if len(content) > MAX_FILE_SIZE:
+
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "File too large"
+                }
+            )
+
+        # =========================
+        # IPFS
+        # =========================
+        cid = add_to_ipfs(
+            content,
+            file.filename
+        )
+
+        ipfs_url = build_ipfs_url(cid)
+
+        # =========================
+        # CHECK DUPLICATE CID
+        # =========================
+        conn = get_conn()
+        c = conn.cursor()
+
+        c.execute("""
+            SELECT
+                id,
+                cid,
+                filename,
+                owner,
+                uploader,
+                tx_hash,
+                ipfs_url,
+                uploaded_at,
+                blockchain_status
+            FROM files
+            WHERE cid=%s
+            LIMIT 1
+        """, (cid,))
+
+        existing = c.fetchone()
+
+        if existing:
+
+            conn.close()
+
+            return {
+                "status": "duplicate",
+                "message": "File already exists",
+                "cid": existing[1],
+                "ipfs_url": existing[6]
+            }
+
+        # =========================
+        # SAVE DB
+        # =========================
+        uploaded_at = int(time.time())
+
+        c.execute("""
+            INSERT INTO files
+            (
+                cid,
+                filename,
+                owner,
+                uploader,
+                ipfs_url,
+                uploaded_at,
+                blockchain_status
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (
+            cid,
+            file.filename,
+            uploader,
+            uploader,
+            ipfs_url,
+            uploaded_at,
+            "pending"
+        ))
+
+        file_id = c.fetchone()[0]
+
+        conn.commit()
+        conn.close()
+
+        # =========================
+        # BLOCKCHAIN QUEUE
+        # =========================
+        blockchain_queue.put({
+            "file_id": file_id,
+            "cid": cid,
+            "filename": file.filename,
+            "uploader": uploader
         })
+
+        # =========================
+        # RETURN FAST
+        # =========================
+        return {
+            "status": "success",
+            "message": "Uploaded successfully",
+            "cid": cid,
+            "ipfs_url": ipfs_url,
+            "blockchain_status": "pending"
+        }
 
     except Exception as e:
-        logger.error(f"[UPLOAD] Loi khong xac dinh: {e}")
-        logger.error(traceback.format_exc())
-        return JSONResponse(status_code=500, content={
-            "error": "An unexpected error occurred. Please try again."
-        })
+
+        print(traceback.format_exc())
+
+        if conn:
+            conn.close()
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e)
+            }
+        )
 
 # =========================
 # MY FILES
 # =========================
-@app.get("/my-files/{user_address}")
-def get_my_files(user_address: str):
-    logger.info(f"[MY-FILES] user_address: {user_address}")
+@app.get("/my-files/{address}")
+def my_files(address: str):
+
     try:
-        user_address = to_checksum(user_address)
-        files = fetch_all_files()
 
-        one_day_ago = int(time.time()) - (24 * 60 * 60)
+        conn = get_conn()
+        c = conn.cursor()
 
-        result = [
-            f for f in files
-            if (f["owner"].lower() == user_address.lower()
-            or f["uploader"].lower() == user_address.lower())
-            and f["timestamp"] >= one_day_ago
+        c.execute("""
+            SELECT
+                id,
+                cid,
+                filename,
+                owner,
+                uploader,
+                tx_hash,
+                ipfs_url,
+                uploaded_at,
+                blockchain_status
+            FROM files
+            WHERE
+                owner=%s
+                OR uploader=%s
+            ORDER BY uploaded_at DESC
+        """, (
+            address,
+            address
+        ))
+
+        rows = c.fetchall()
+
+        conn.close()
+
+        return [
+            {
+                "id": r[0],
+                "cid": r[1],
+                "filename": r[2],
+                "owner": r[3],
+                "uploader": r[4],
+                "tx_hash": r[5],
+                "ipfs_url": r[6],
+                "timestamp": r[7],
+                "blockchain_status": r[8]
+            }
+            for r in rows
         ]
-        logger.info(f"[MY-FILES] Tra ve {len(result)} files cho {user_address[:10]}...")
-        return result
 
     except Exception as e:
-        logger.error(f"[MY-FILES] Loi: {e}")
-        logger.error(traceback.format_exc())
-        return JSONResponse(status_code=500, content={"error": str(e)})
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e)
+            }
+        )
 
 # =========================
 # SHARED FILES
 # =========================
-@app.get("/shared-files/{user_address}")
-def get_shared_files(user_address: str):
-    logger.info(f"[SHARED-FILES] user_address: {user_address}")
+@app.get("/shared-files/{address}")
+def shared_files(address: str):
+
     try:
-        user_address = to_checksum(user_address)
-        files = fetch_all_files()
 
-        one_day_ago = int(time.time()) - (24 * 60 * 60)
+        conn = get_conn()
+        c = conn.cursor()
 
-        result = [
-            f for f in files
-            if f["uploader"].lower() != user_address.lower()
-            and f["timestamp"] >= one_day_ago
+        c.execute("""
+            SELECT
+                id,
+                cid,
+                filename,
+                owner,
+                uploader,
+                tx_hash,
+                ipfs_url,
+                uploaded_at,
+                blockchain_status
+            FROM files
+            WHERE uploader != %s
+            ORDER BY uploaded_at DESC
+        """, (address,))
+
+        rows = c.fetchall()
+
+        conn.close()
+
+        return [
+            {
+                "id": r[0],
+                "cid": r[1],
+                "filename": r[2],
+                "owner": r[3],
+                "uploader": r[4],
+                "tx_hash": r[5],
+                "ipfs_url": r[6],
+                "timestamp": r[7],
+                "blockchain_status": r[8]
+            }
+            for r in rows
         ]
-        logger.info(f"[SHARED-FILES] Tra ve {len(result)} files cho {user_address[:10]}...")
-        return result
 
     except Exception as e:
-        logger.error(f"[SHARED-FILES] Loi: {e}")
-        logger.error(traceback.format_exc())
-        return JSONResponse(status_code=500, content={"error": str(e)})
 
-@app.get("/shared-files/{user_address}/{filter_address}")
-def get_shared_files_filtered(user_address: str, filter_address: str):
-    logger.info(f"[SHARED-FILES-FILTER] user: {user_address} | filter: {filter_address}")
-    try:
-        user_address = to_checksum(user_address)
-        filter_address = to_checksum(filter_address)
-
-        files = fetch_all_files()
-
-        one_day_ago = int(time.time()) - (24 * 60 * 60)
-
-        result = [
-            f for f in files
-            if f["uploader"].lower() != user_address.lower()  # vẫn là shared
-            and f["uploader"].lower() == filter_address.lower()  # filter theo user click
-            and f["timestamp"] >= one_day_ago
-        ]
-
-        logger.info(f"[SHARED-FILES-FILTER] Tra ve {len(result)} files")
-        return result
-
-    except Exception as e:
-        logger.error(f"[SHARED-FILES-FILTER] Loi: {e}")
-        logger.error(traceback.format_exc())
-        return JSONResponse(status_code=500, content={"error": str(e)})
-
-# =========================
-# REFRESH
-# =========================
-@app.get("/refresh")
-def refresh():
-    logger.info("[REFRESH] Dang refresh...")
-    try:
-        _cache["last_updated"] = 0
-        files = fetch_all_files()
-        logger.info(f"[REFRESH] Tong: {len(files)} files")
-        return {"total": len(files)}
-    except Exception as e:
-        logger.error(f"[REFRESH] Loi: {e}")
-        logger.error(traceback.format_exc())
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": str(e)
+            }
+        )
 
 # =========================
 # RUN
 # =========================
 if __name__ == "__main__":
-    import uvicorn # noqa
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+
+    import uvicorn
+
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True
+    )
