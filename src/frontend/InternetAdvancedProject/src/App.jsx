@@ -114,6 +114,13 @@ async function uploadFile() {
     setUploading(false);
   }
 }
+async function refresh() {
+  await loadFiles(role === "owner" ? account : userAddress);
+
+  if (role === "owner") {
+    await loadUsers();
+  }
+}
 
   // LOGIN
   if (!role) {
