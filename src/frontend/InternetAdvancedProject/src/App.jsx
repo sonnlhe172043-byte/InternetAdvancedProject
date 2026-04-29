@@ -87,27 +87,33 @@ function App() {
     setMyFiles(my.data || []);
     setSharedFiles(shared.data || []);
   }
+  const [uploadError, setUploadError] = useState("");
+  const [uploadSuccess, setUploadSuccess] = useState("");
 
-  async function uploadFile() {
-    if (!file) return alert("Select file");
+async function uploadFile() {
+  if (!file) return alert("Please select a file");
 
-    const formData = new FormData();
-    formData.append("file", file);
+  const formData = new FormData();
+  formData.append("file", file);
 
-    if (role === "owner") formData.append("user_address", account);
-    else formData.append("permission_id", permissionId);
+  if (role === "owner") formData.append("user_address", account);
+  else formData.append("permission_id", permissionId);
 
-    setUploading(true);
-    await axios.post(`${BACKEND_URL}/upload`, formData);
-    setUploading(false);
+  setUploading(true);
+  setUploadError("");
+  setUploadSuccess("");
 
+  try {
+    const res = await axios.post(`${BACKEND_URL}/upload`, formData);
+    setUploadSuccess(res.data.message);
     await loadFiles(role === "owner" ? account : userAddress);
+  } catch (err) {
+    const msg = err?.response?.data?.error || err.message || "Something went wrong";
+    setUploadError(`Upload failed: ${msg}`);
+  } finally {
+    setUploading(false);
   }
-
-  async function refresh() {
-    const addr = role === "owner" ? account : userAddress;
-    await loadFiles(addr);
-  }
+}
 
   // LOGIN
   if (!role) {
@@ -212,6 +218,12 @@ function App() {
 
               <button onClick={refresh}>Refresh</button>
             </div>
+            {uploadSuccess && (
+                <p style={{ color: "green", marginTop: 8 }}>{uploadSuccess}</p>
+            )}
+            {uploadError && (
+                <p style={{ color: "red", marginTop: 8 }}>{uploadError}</p>
+            )}
           </div>
         </div>
 

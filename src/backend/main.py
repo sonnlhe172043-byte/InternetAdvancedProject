@@ -367,28 +367,51 @@ async def upload(
 
             if not row:
                 logger.warning(f"[UPLOAD] permission_id khong hop le: {permission_id}")
-                return JSONResponse(status_code=400, content={"error": "invalid permission"})
+                return JSONResponse(status_code=400, content={
+                    "error": "Invalid permission ID. Please check and try again."
+                })
 
             addr = row[0]
             if not addr:
                 logger.warning(f"[UPLOAD] user_address trong cho permission_id: {permission_id}")
-                return JSONResponse(status_code=400, content={"error": "user_address missing"})
+                return JSONResponse(status_code=400, content={
+                    "error": "No wallet address linked to this permission."
+                })
 
             logger.info(f"[UPLOAD] Tim thay address: {addr}")
 
         else:
             logger.error("[UPLOAD] Thieu ca permission_id va user_address")
-            return JSONResponse(status_code=400, content={"error": "missing permission_id or user_address"})
+            return JSONResponse(status_code=400, content={
+                "error": "Missing permission ID or wallet address."
+            })
 
+        # ✅ IPFS
         logger.info(f"[UPLOAD] Dang upload len IPFS | filename: {file.filename}")
-        content = await file.read()
-        cid = add_to_ipfs(content, file.filename)
-        logger.info(f"[UPLOAD] IPFS thanh cong | CID: {cid}")
+        try:
+            content = await file.read()
+            cid = add_to_ipfs(content, file.filename)
+            logger.info(f"[UPLOAD] IPFS thanh cong | CID: {cid}")
+        except Exception as e:
+            logger.error(f"[UPLOAD] IPFS that bai: {e}")
+            logger.error(traceback.format_exc())
+            return JSONResponse(status_code=500, content={
+                "error": "Failed to upload file to IPFS. Please try again."
+            })
 
+        # ✅ Blockchain
         logger.info(f"[UPLOAD] Dang luu len blockchain | CID: {cid} | addr: {addr}")
-        tx_hash = store_file(cid, file.filename, addr)
-        logger.info(f"[UPLOAD] Blockchain thanh cong | tx_hash: {tx_hash}")
+        try:
+            tx_hash = store_file(cid, file.filename, addr)
+            logger.info(f"[UPLOAD] Blockchain thanh cong | tx_hash: {tx_hash}")
+        except Exception as e:
+            logger.error(f"[UPLOAD] Blockchain that bai: {e}")
+            logger.error(traceback.format_exc())
+            return JSONResponse(status_code=500, content={
+                "error": "File was saved to IPFS but could not be recorded on blockchain. Please try again."
+            })
 
+        # ✅ Cache
         new_file = {
             "id":        len(_cache["files"]) + 1,
             "cid":       cid,
@@ -402,12 +425,20 @@ async def upload(
         _cache["files"].append(new_file)
         logger.info(f"[UPLOAD] Da them file moi vao cache | filename: {file.filename} | id: {new_file['id']}")
 
-        return {"status": "success", "cid": cid, "tx_hash": tx_hash, "uploader": addr}
+        return JSONResponse(status_code=200, content={
+            "status":   "success",
+            "message":  f"'{file.filename}' uploaded successfully!",
+            "cid":      cid,
+            "tx_hash":  tx_hash,
+            "uploader": addr
+        })
 
     except Exception as e:
-        logger.error(f"[UPLOAD] Loi: {e}")
+        logger.error(f"[UPLOAD] Loi khong xac dinh: {e}")
         logger.error(traceback.format_exc())
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(status_code=500, content={
+            "error": "An unexpected error occurred. Please try again."
+        })
 
 # =========================
 # MY FILES

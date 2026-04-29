@@ -1,7 +1,9 @@
-from web3 import Web3
+from web3 import Web3 # noqa
 import os
 import json
-from dotenv import load_dotenv
+import threading
+import time
+from dotenv import load_dotenv # noqa
 
 # ======================
 # BASE DIRECTORY
@@ -47,40 +49,49 @@ contract = w3.eth.contract(
 )
 
 # ======================
+# NONCE LOCK (chi lock phan lay nonce, khong lock ca tx)
+# ======================
+nonce_lock = threading.Lock()
+
+# ======================
 # STORE FILE
 # ======================
-def store_file(cid, filename, user_address):
-    try:
-        # checksum address
-        user_address = Web3.to_checksum_address(user_address)
+def store_file(cid, filename, user_address, retry=3):
+    user_address = Web3.to_checksum_address(user_address)
+    account = w3.eth.account.from_key(private_key)
 
-        account = w3.eth.account.from_key(private_key)
+    for attempt in range(retry):
+        try:
+            # ✅ Chi lock luc lay nonce (vai ms), khong lock ca qua trinh gui tx
+            with nonce_lock:
+                nonce = w3.eth.get_transaction_count(account.address, 'pending')
 
-        nonce = w3.eth.get_transaction_count(account.address)
+            # ✅ Gas dong theo network
+            base_fee = w3.eth.get_block('pending')['baseFeePerGas']
 
-        tx = contract.functions.uploadFile(
-            cid,
-            filename,
-            user_address
-        ).build_transaction({
-            "from": account.address,
-            "nonce": nonce,
-            "gas": 300000,
-            "chainId": 11155111,
-            "maxFeePerGas": w3.to_wei("2", "gwei"),
-            "maxPriorityFeePerGas": w3.to_wei("1", "gwei"),
-        })
+            tx = contract.functions.uploadFile(
+                cid,
+                filename,
+                user_address
+            ).build_transaction({
+                "from": account.address,
+                "nonce": nonce,
+                "gas": 300000,
+                "chainId": 11155111,
+                "maxFeePerGas": int(base_fee * 2),
+                "maxPriorityFeePerGas": w3.to_wei("1.5", "gwei"),
+            })
 
-        signed_tx = w3.eth.account.sign_transaction(tx, private_key)
+            signed_tx = w3.eth.account.sign_transaction(tx, private_key)
+            tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+            tx_hex = tx_hash.hex()
 
-        tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+            print(f"TX HASH: {tx_hex}")
+            return tx_hex
 
-        tx_hex = tx_hash.hex()
-
-        print("TX HASH:", tx_hex)
-
-        return tx_hex
-
-    except Exception as e:
-        print("ERROR store_file:", str(e))
-        raise
+        except Exception as e:
+            print(f"LOI store_file lan {attempt + 1}/{retry}: {str(e)}")
+            if attempt < retry - 1:
+                time.sleep(1)
+            else:
+                raise
